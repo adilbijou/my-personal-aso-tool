@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASO Intelligence</title>
+<meta name="description" content="Self-hosted App Store keyword rank, competitor, review, and charts tracker.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">// aso-intel</div>
+      <div class="brand-name">App Store Intelligence</div>
+      <div class="brand-sub" id="brand-app-name">Loading data&hellip;</div>
+    </div>
+
+    <ul class="nav-list" id="nav-list">
+      <li><button class="nav-item active" data-tab="overview">Overview</button></li>
+      <li><button class="nav-item" data-tab="keywords">Keyword ranks<span class="count" id="nav-count-keywords"></span></button></li>
+      <li><button class="nav-item" data-tab="competitors">Competitors<span class="count" id="nav-count-competitors"></span></button></li>
+      <li><button class="nav-item" data-tab="reviews">Reviews</button></li>
+      <li><button class="nav-item" data-tab="niche">Niche explorer</button></li>
+      <li><button class="nav-item" data-tab="charts">Charts<span class="count" id="nav-count-charts"></span></button></li>
+    </ul>
+
+    <div class="sidebar-footer" id="sidebar-footer">
+      Data refreshes daily via GitHub Actions.
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1 class="page-title" id="page-title">Overview</h1>
+
+      <div class="search-wrap">
+        <span class="search-icon">&#8981;</span>
+        <input class="search-input" id="global-search" type="text" placeholder="Search keywords, apps, chart entries&hellip;" autocomplete="off">
+        <div class="search-results" id="search-results"></div>
+      </div>
+
+      <div class="date-nav">
+        <button class="date-nav-btn" id="date-prev" aria-label="Previous day" title="Previous day">&lsaquo;</button>
+        <span class="date-label" id="date-label">&mdash;</span>
+        <button class="date-nav-btn" id="date-next" aria-label="Next day" title="Next day">&rsaquo;</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <section class="tab-panel active" id="tab-overview">
+        <div class="scoreboard" id="scoreboard"></div>
+        <h2 class="section-heading">Signal feed</h2>
+        <p class="section-sub">What changed on this date, compared to the previous snapshot.</p>
+        <div id="signal-feed-container"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-keywords">
+        <div class="filter-bar">
+          <input class="filter-input" id="keyword-filter" type="text" placeholder="Filter keywords&hellip;">
+          <select class="filter-select" id="keyword-country-filter"></select>
+        </div>
+        <div id="keyword-trend-panel"></div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Keyword</th><th>Country</th><th>Rank</th><th>Change</th><th>Difficulty</th><th>Results</th>
+            </tr>
+          </thead>
+          <tbody id="keyword-table-body"></tbody>
+        </table>
+        <div id="keyword-empty" style="display:none"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-competitors">
+        <div class="filter-bar">
+          <input class="filter-input" id="competitor-filter" type="text" placeholder="Filter competitors by name&hellip;">
+        </div>
+        <div class="panel" style="padding:0" id="competitor-list"></div>
+        <div id="competitor-empty" style="display:none"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-reviews">
+        <div class="filter-bar">
+          <select class="filter-select" id="review-app-select"></select>
+          <select class="filter-select" id="review-country-select"></select>
+        </div>
+        <div id="review-body"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-niche">
+        <div class="filter-bar">
+          <select class="filter-select" id="niche-seed-select"></select>
+          <input class="filter-input" id="niche-filter" type="text" placeholder="Filter suggestions&hellip;">
+        </div>
+        <div id="niche-body"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-charts">
+        <div class="filter-bar">
+          <select class="filter-select" id="chart-country-select"></select>
+          <select class="filter-select" id="chart-category-select"></select>
+          <select class="filter-select" id="chart-type-select"></select>
+          <input class="filter-input" id="chart-filter" type="text" placeholder="Filter apps by name&hellip;">
+        </div>
+        <div id="chart-body"></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="data-utils.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
