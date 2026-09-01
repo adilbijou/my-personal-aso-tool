@@ -2,24 +2,26 @@
 aso_intelligence_engine.py — Personal App Store Intelligence Engine.
 
 Runs five modules against Apple's public/undocumented endpoints (no paid
-APIs, no API keys) and appends the results to two historical data files:
+APIs, no API keys) for every tracked app "project" defined in
+docs/data/tracking_config.json — which you manage from the dashboard's
+Settings tab — and appends the results to two historical data files:
 
-  data/comprehensive_aso_history.json   — full nested history, one entry per day
-  data/aso_dashboard.csv                — flat, tall (EAV-style) history, one row
-                                           per metric, safe to link into Looker
-                                           Studio / Excel / Google Sheets
+  docs/data/comprehensive_aso_history.json   — full nested history, one entry
+                                                per day, one sub-entry per project
+  docs/data/aso_dashboard.csv                — flat, tall (EAV-style) history,
+                                                one row per metric, tagged with
+                                                which project it belongs to
 
-Modules:
+Modules (run once per project):
   1. Keyword Rank Tracker        — exact rank + a difficulty proxy score
   2. Competitor Metadata Spy     — metadata snapshots + day-over-day diffs
   3. Review Miner                — word-frequency + 1★/2★ "feature gap" mining
   4. Autocomplete Niche Explorer — hidden MZSearchHints endpoint, A-to-Z expansion
   5. Charts & New Releases       — classic RSS generator feeds, per category
 
-Designed to run unattended on a daily GitHub Actions cron job. Every module
-is wrapped in its own try/except in main() so a single broken/blocked
-endpoint never kills the whole run — you still get partial data and a clean
-commit.
+Designed to run unattended on a daily GitHub Actions cron job. Every module,
+for every project, is wrapped in its own try/except in main() so a single
+broken/blocked endpoint or misconfigured project never kills the whole run.
 
 Usage:
     python aso_intelligence_engine.py
@@ -45,13 +47,13 @@ import config
 # ──────────────────────────────────────────────────────────────────────────
 
 CSV_FIELDNAMES = [
-    "date", "module", "country", "category_id", "app_id",
+    "date", "project", "module", "country", "category_id", "app_id",
     "keyword", "metric_name", "metric_value", "notes",
 ]
 
 # A reasonably complete map of iTunes storefront IDs, required as the
 # X-Apple-Store-Front header for the hidden autocomplete endpoint. If a
-# country you use isn't listed, add it, or the engine falls back to "us".
+# country a project uses isn't listed, the engine falls back to "us".
 STOREFRONT_IDS = {
     "us": "143441-1,29", "gb": "143444-1,29", "ca": "143455-1,29",
     "au": "143460-1,29", "de": "143443-1,29", "fr": "143442-1,29",
@@ -112,11 +114,11 @@ def safe_get(session, url, headers=None, params=None):
         )
         time.sleep(config.REQUEST_DELAY_SECONDS)
         if resp.status_code != 200:
-            print(f"    [warn] HTTP {resp.status_code} for {resp.url}")
+            print(f"      [warn] HTTP {resp.status_code} for {resp.url}")
             return None
         return resp
     except requests.RequestException as e:
-        print(f"    [warn] request failed for {url}: {e}")
+        print(f"      [warn] request failed for {url}: {e}")
         return None
 
 
@@ -132,10 +134,10 @@ def safe_extract(entry, *keys, default=None):
     return cur
 
 
-def _csv_row(date_str, module, country="", category_id="", app_id="",
+def _csv_row(date_str, project_id, module, country="", category_id="", app_id="",
              keyword="", metric_name="", metric_value="", notes=""):
     return {
-        "date": date_str, "module": module, "country": country,
+        "date": date_str, "project": project_id, "module": module, "country": country,
         "category_id": category_id, "app_id": app_id, "keyword": keyword,
         "metric_name": metric_name, "metric_value": metric_value, "notes": notes,
     }
@@ -147,6 +149,42 @@ def clean_and_tokenize(text):
     text = re.sub(r"[^a-z\s]", " ", text)
     words = text.split()
     return [w for w in words if len(w) > 2 and w not in STOPWORDS]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TRACKING CONFIG (what to track — editable from the dashboard's Settings tab)
+# ──────────────────────────────────────────────────────────────────────────
+
+def load_tracking_config():
+    """Loads docs/data/tracking_config.json. Returns an empty project list
+    (with a warning) if the file is missing, empty, or malformed, so a
+    fresh install or a mid-edit file never crashes the whole run."""
+    if not os.path.exists(config.TRACKING_CONFIG_PATH):
+        print(f"  [warn] {config.TRACKING_CONFIG_PATH} not found — no projects to track. "
+              f"Add one from the dashboard's Settings tab.")
+        return {"projects": []}
+    try:
+        with open(config.TRACKING_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  [warn] couldn't parse {config.TRACKING_CONFIG_PATH} ({e}) — treating as empty.")
+        return {"projects": []}
+
+    projects = data.get("projects", [])
+    valid = []
+    for p in projects:
+        if not p.get("id") or not p.get("app_id"):
+            print(f"  [warn] skipping a project missing 'id' or 'app_id': {p}")
+            continue
+        p.setdefault("label", p["id"])
+        p.setdefault("keywords", [])
+        p.setdefault("countries", ["us"])
+        p.setdefault("competitor_app_ids", [])
+        p.setdefault("categories", {})
+        p.setdefault("review_countries", p["countries"][:1] or ["us"])
+        p.setdefault("autocomplete_seeds", [])
+        valid.append(p)
+    return {"projects": valid}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -226,15 +264,15 @@ def calculate_keyword_difficulty(result_count, results, limit):
     return round(saturation_score + strength_score, 1), round(avg_top10_ratings, 1)
 
 
-def run_keyword_rank_tracker(session):
+def run_keyword_rank_tracker(session, project):
     data = {}
     csv_rows = []
     auto_competitors = set()
     today = date.today().isoformat()
 
-    for country in config.TARGET_COUNTRIES:
+    for country in project["countries"]:
         data[country] = {}
-        for keyword in config.TARGET_KEYWORDS:
+        for keyword in project["keywords"]:
             params = {
                 "term": keyword, "country": country,
                 "entity": "software", "limit": 200,
@@ -254,7 +292,7 @@ def run_keyword_rank_tracker(session):
 
             rank = None
             for idx, app in enumerate(results):
-                if str(app.get("trackId")) == str(config.TARGET_APP_ID):
+                if str(app.get("trackId")) == str(project["app_id"]):
                     rank = idx + 1
                     break
 
@@ -264,7 +302,7 @@ def run_keyword_rank_tracker(session):
 
             for app in results[: config.AUTO_DISCOVER_TOP_N_COMPETITORS]:
                 tid = app.get("trackId")
-                if tid and str(tid) != str(config.TARGET_APP_ID):
+                if tid and str(tid) != str(project["app_id"]):
                     auto_competitors.add(str(tid))
 
             data[country][keyword] = {
@@ -274,14 +312,14 @@ def run_keyword_rank_tracker(session):
                 "avg_top10_ratings": avg_top10_ratings,
             }
 
-            csv_rows.append(_csv_row(today, "keyword_rank", country=country, keyword=keyword,
+            csv_rows.append(_csv_row(today, project["id"], "keyword_rank", country=country, keyword=keyword,
                                       metric_name="rank", metric_value=rank if rank is not None else ""))
-            csv_rows.append(_csv_row(today, "keyword_rank", country=country, keyword=keyword,
+            csv_rows.append(_csv_row(today, project["id"], "keyword_rank", country=country, keyword=keyword,
                                       metric_name="difficulty_score", metric_value=difficulty_score))
-            csv_rows.append(_csv_row(today, "keyword_rank", country=country, keyword=keyword,
+            csv_rows.append(_csv_row(today, project["id"], "keyword_rank", country=country, keyword=keyword,
                                       metric_name="result_count", metric_value=result_count))
 
-            print(f"    [{country}] '{keyword}': rank={rank}  difficulty={difficulty_score}  results={result_count}")
+            print(f"      [{country}] '{keyword}': rank={rank}  difficulty={difficulty_score}  results={result_count}")
 
     return data, csv_rows, auto_competitors
 
@@ -343,17 +381,16 @@ def diff_metadata(old, new, max_chars=300):
     return changes
 
 
-def build_competitor_id_list(auto_discovered):
-    ids = [config.TARGET_APP_ID, *config.COMPETITOR_APP_IDS, *sorted(auto_discovered)]
+def build_competitor_id_list(project, auto_discovered):
+    ids = [project["app_id"], *project["competitor_app_ids"], *sorted(auto_discovered)]
     deduped = list(dict.fromkeys(ids))  # preserve order, drop dupes
     return deduped[: config.MAX_COMPETITORS_TRACKED]
 
 
-def run_competitor_metadata_spy(session, prev_metadata, competitor_ids):
+def collect_competitor_metadata(session, project_id, prev_metadata, competitor_ids, lookup_country):
     data = {}
     csv_rows = []
     today = date.today().isoformat()
-    lookup_country = config.TARGET_COUNTRIES[0]
 
     for app_id in competitor_ids:
         meta = fetch_app_metadata(session, app_id, country=lookup_country)
@@ -373,19 +410,19 @@ def run_competitor_metadata_spy(session, prev_metadata, competitor_ids):
 
         data[app_id] = meta
 
-        csv_rows.append(_csv_row(today, "competitor_metadata", app_id=app_id,
+        csv_rows.append(_csv_row(today, project_id, "competitor_metadata", app_id=app_id,
                                   metric_name="rating_count", metric_value=meta.get("rating_count") or ""))
-        csv_rows.append(_csv_row(today, "competitor_metadata", app_id=app_id,
+        csv_rows.append(_csv_row(today, project_id, "competitor_metadata", app_id=app_id,
                                   metric_name="average_rating", metric_value=meta.get("average_rating") or ""))
-        csv_rows.append(_csv_row(today, "competitor_metadata", app_id=app_id,
+        csv_rows.append(_csv_row(today, project_id, "competitor_metadata", app_id=app_id,
                                   metric_name="version", metric_value=meta.get("version") or ""))
         for change in changes:
-            csv_rows.append(_csv_row(today, "metadata_change", app_id=app_id,
+            csv_rows.append(_csv_row(today, project_id, "metadata_change", app_id=app_id,
                                       metric_name=change["field"], metric_value=change["new"],
                                       notes=f"was: {change['old']}"))
-            print(f"    [CHANGE] app {app_id}: {change['field']} changed")
+            print(f"      [CHANGE] app {app_id}: {change['field']} changed")
 
-        print(f"    app {app_id}: {meta.get('title')!r} v{meta.get('version')} "
+        print(f"      app {app_id}: {meta.get('title')!r} v{meta.get('version')} "
               f"rating={meta.get('average_rating')} ({meta.get('rating_count')} ratings)")
 
     return data, csv_rows
@@ -434,14 +471,14 @@ def fetch_reviews(session, app_id, country, max_pages):
     return all_reviews
 
 
-def run_review_miner(session):
+def run_review_miner(session, project, review_app_ids):
     data = {}
     csv_rows = []
     today = date.today().isoformat()
 
-    for app_id in config.REVIEW_APP_IDS:
+    for app_id in review_app_ids:
         data[app_id] = {}
-        for country in config.REVIEW_COUNTRIES:
+        for country in project["review_countries"]:
             reviews = fetch_reviews(session, app_id, country, config.REVIEW_PAGES_PER_RUN)
             if not reviews:
                 data[app_id][country] = {"error": "no_reviews_found"}
@@ -471,17 +508,17 @@ def run_review_miner(session):
             }
 
             for word, count in top_words:
-                csv_rows.append(_csv_row(today, "review_word_freq", country=country, app_id=app_id,
+                csv_rows.append(_csv_row(today, project["id"], "review_word_freq", country=country, app_id=app_id,
                                           metric_name=word, metric_value=count))
             for word, count in feature_gap_words:
-                csv_rows.append(_csv_row(today, "feature_gap_word", country=country, app_id=app_id,
+                csv_rows.append(_csv_row(today, project["id"], "feature_gap_word", country=country, app_id=app_id,
                                           metric_name=word, metric_value=count))
-            csv_rows.append(_csv_row(today, "review_summary", country=country, app_id=app_id,
+            csv_rows.append(_csv_row(today, project["id"], "review_summary", country=country, app_id=app_id,
                                       metric_name="average_rating_sampled", metric_value=avg_rating))
-            csv_rows.append(_csv_row(today, "review_summary", country=country, app_id=app_id,
+            csv_rows.append(_csv_row(today, project["id"], "review_summary", country=country, app_id=app_id,
                                       metric_name="negative_review_count", metric_value=len(negative_reviews)))
 
-            print(f"    app {app_id} [{country}]: {len(reviews)} reviews, "
+            print(f"      app {app_id} [{country}]: {len(reviews)} reviews, "
                   f"avg={avg_rating}, negative={len(negative_reviews)}")
 
     return data, csv_rows
@@ -514,37 +551,38 @@ def get_autocomplete_hints(session, term, country):
                 terms.append(h)
         return list(dict.fromkeys(terms))  # dedupe, preserve order
     except Exception as e:
-        print(f"    [warn] failed to parse autocomplete hints for {term!r}: {e}")
+        print(f"      [warn] failed to parse autocomplete hints for {term!r}: {e}")
         return []
 
 
-def run_autocomplete_explorer(session):
+def run_autocomplete_explorer(session, project):
     results = {}
     csv_rows = []
     today = date.today().isoformat()
+    ac_country = project["countries"][0] if project["countries"] else "us"
 
-    for seed in config.AUTOCOMPLETE_SEED_KEYWORDS:
+    for seed in project["autocomplete_seeds"]:
         seed_results = {}
 
-        base_hints = get_autocomplete_hints(session, seed, config.AUTOCOMPLETE_COUNTRY)
+        base_hints = get_autocomplete_hints(session, seed, ac_country)
         seed_results["_base"] = base_hints
         for h in base_hints:
-            csv_rows.append(_csv_row(today, "autocomplete_hint", country=config.AUTOCOMPLETE_COUNTRY,
+            csv_rows.append(_csv_row(today, project["id"], "autocomplete_hint", country=ac_country,
                                       keyword=seed, metric_name="base", metric_value=h))
 
         all_terms = set(base_hints)
         for letter in config.AUTOCOMPLETE_EXPANSION_CHARS:
             expanded_term = f"{seed} {letter}"
-            hints = get_autocomplete_hints(session, expanded_term, config.AUTOCOMPLETE_COUNTRY)
+            hints = get_autocomplete_hints(session, expanded_term, ac_country)
             seed_results[letter] = hints
             all_terms.update(hints)
             for h in hints:
-                csv_rows.append(_csv_row(today, "autocomplete_hint", country=config.AUTOCOMPLETE_COUNTRY,
+                csv_rows.append(_csv_row(today, project["id"], "autocomplete_hint", country=ac_country,
                                           keyword=seed, metric_name=letter, metric_value=h))
 
         seed_results["_all_unique_longtail"] = sorted(all_terms)
         results[seed] = seed_results
-        print(f"    seed '{seed}': {len(base_hints)} base hints, "
+        print(f"      seed '{seed}': {len(base_hints)} base hints, "
               f"{len(all_terms)} unique long-tail suggestions after A-Z expansion")
 
     return results, csv_rows
@@ -580,14 +618,14 @@ def fetch_chart(session, country, category_id, chart_type, limit):
     return chart
 
 
-def run_charts_monitor(session, prev_charts):
+def run_charts_monitor(session, project, prev_charts):
     data = {}
     csv_rows = []
     today = date.today().isoformat()
 
-    for country in config.TARGET_COUNTRIES:
+    for country in project["countries"]:
         data[country] = {}
-        for category_id, category_name in config.TARGET_CATEGORIES.items():
+        for category_id, category_name in project["categories"].items():
             data[country][category_id] = {}
             prev_country_cat = prev_charts.get(country, {}).get(category_id, {})
 
@@ -620,17 +658,84 @@ def run_charts_monitor(session, prev_charts):
 
                 for e in entries:
                     csv_rows.append(_csv_row(
-                        today, "chart_entry", country=country, category_id=category_id,
+                        today, project["id"], "chart_entry", country=country, category_id=category_id,
                         app_id=e.get("app_id") or "", metric_name=f"{chart_type}_rank",
                         metric_value=e["rank"],
                         notes=f"{e.get('name')} | new_entrant={e['is_new_entrant']}",
                     ))
 
                 new_count = sum(1 for e in entries if e["is_new_entrant"])
-                print(f"    [{country}] {category_name} / {chart_type}: "
+                print(f"      [{country}] {category_name} / {chart_type}: "
                       f"{len(entries)} entries, {new_count} new entrants")
 
     return data, csv_rows
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# PER-PROJECT ORCHESTRATION
+# ──────────────────────────────────────────────────────────────────────────
+
+def run_project(session, project, prev_project_snapshot):
+    """Runs all five modules for a single tracked project. Every module is
+    independently try/excepted so one broken endpoint doesn't take out the
+    rest of this project's data, or any other project's."""
+    project_entry = {"app_id": project["app_id"], "label": project["label"]}
+    csv_rows = []
+    auto_competitors = set()
+
+    print(f"\n  [1/5] Keyword Rank Tracker")
+    try:
+        kr_data, kr_rows, auto_competitors = run_keyword_rank_tracker(session, project)
+        project_entry["keyword_ranks"] = kr_data
+        csv_rows.extend(kr_rows)
+    except Exception as e:
+        print(f"    ERROR in keyword rank tracker: {e}")
+        project_entry["keyword_ranks"] = {"error": str(e)}
+
+    print(f"\n  [2/5] Competitor Metadata Timeline & Update Spy")
+    try:
+        competitor_ids = build_competitor_id_list(project, auto_competitors)
+        lookup_country = project["countries"][0] if project["countries"] else "us"
+        prev_metadata = prev_project_snapshot.get("competitor_metadata", {})
+        cm_data, cm_rows = collect_competitor_metadata(
+            session, project["id"], prev_metadata, competitor_ids, lookup_country
+        )
+        project_entry["competitor_metadata"] = cm_data
+        csv_rows.extend(cm_rows)
+    except Exception as e:
+        print(f"    ERROR in competitor metadata spy: {e}")
+        project_entry["competitor_metadata"] = {"error": str(e)}
+
+    print(f"\n  [3/5] Customer Review Miner & Opportunity Finder")
+    try:
+        review_app_ids = list(dict.fromkeys([project["app_id"], *project["competitor_app_ids"]]))
+        rm_data, rm_rows = run_review_miner(session, project, review_app_ids)
+        project_entry["review_mining"] = rm_data
+        csv_rows.extend(rm_rows)
+    except Exception as e:
+        print(f"    ERROR in review miner: {e}")
+        project_entry["review_mining"] = {"error": str(e)}
+
+    print(f"\n  [4/5] Real-Time Niche Explorer & Autocomplete Search")
+    try:
+        ac_data, ac_rows = run_autocomplete_explorer(session, project)
+        project_entry["autocomplete"] = ac_data
+        csv_rows.extend(ac_rows)
+    except Exception as e:
+        print(f"    ERROR in autocomplete explorer: {e}")
+        project_entry["autocomplete"] = {"error": str(e)}
+
+    print(f"\n  [5/5] New Releases & Trending Charts Monitor")
+    try:
+        prev_charts = prev_project_snapshot.get("charts", {})
+        ch_data, ch_rows = run_charts_monitor(session, project, prev_charts)
+        project_entry["charts"] = ch_data
+        csv_rows.extend(ch_rows)
+    except Exception as e:
+        print(f"    ERROR in charts monitor: {e}")
+        project_entry["charts"] = {"error": str(e)}
+
+    return project_entry, csv_rows
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -645,78 +750,40 @@ def main():
     os.makedirs(config.DATA_DIR, exist_ok=True)
     session = get_session()
 
+    tracking = load_tracking_config()
+    projects = tracking["projects"]
+    print(f"\nTracked projects: {len(projects)}"
+          + (f" ({', '.join(p['label'] for p in projects)})" if projects else " — none configured yet."))
+
     history = load_json_history()
     today_str = date.today().isoformat()
     prev_date = get_previous_date_key(history, today_str)
     prev_snapshot = history.get(prev_date, {}) if prev_date else {}
+    prev_projects = prev_snapshot.get("projects", {})
     print(f"Previous snapshot found: {prev_date or 'none (this is day 1)'}")
 
-    # NOTE: JSON object keys that look like integers (all App Store app IDs
-    # do) get reordered to ascending numeric order by JS engines on
-    # JSON.parse, regardless of insertion order — so the dashboard can't
-    # rely on "first key in competitor_metadata" to mean "the target app".
-    # Storing it explicitly here is what the frontend reads instead.
-    today_entry = {
-        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
-        "target_app_id": config.TARGET_APP_ID,
-    }
+    today_entry = {"generated_at_utc": datetime.utcnow().isoformat() + "Z", "projects": {}}
     all_csv_rows = []
-    auto_competitors = set()
 
-    print("\n[1/5] Global Keyword Rank Tracker")
-    try:
-        kr_data, kr_rows, auto_competitors = run_keyword_rank_tracker(session)
-        today_entry["keyword_ranks"] = kr_data
-        all_csv_rows.extend(kr_rows)
-    except Exception as e:
-        print(f"  ERROR in keyword rank tracker: {e}")
-        today_entry["keyword_ranks"] = {"error": str(e)}
-
-    print("\n[2/5] Competitor Metadata Timeline & Update Spy")
-    try:
-        competitor_ids = build_competitor_id_list(auto_competitors)
-        prev_metadata = prev_snapshot.get("competitor_metadata", {})
-        cm_data, cm_rows = run_competitor_metadata_spy(session, prev_metadata, competitor_ids)
-        today_entry["competitor_metadata"] = cm_data
-        all_csv_rows.extend(cm_rows)
-    except Exception as e:
-        print(f"  ERROR in competitor metadata spy: {e}")
-        today_entry["competitor_metadata"] = {"error": str(e)}
-
-    print("\n[3/5] Customer Review Miner & Opportunity Finder")
-    try:
-        rm_data, rm_rows = run_review_miner(session)
-        today_entry["review_mining"] = rm_data
-        all_csv_rows.extend(rm_rows)
-    except Exception as e:
-        print(f"  ERROR in review miner: {e}")
-        today_entry["review_mining"] = {"error": str(e)}
-
-    print("\n[4/5] Real-Time Niche Explorer & Autocomplete Search")
-    try:
-        ac_data, ac_rows = run_autocomplete_explorer(session)
-        today_entry["autocomplete"] = ac_data
-        all_csv_rows.extend(ac_rows)
-    except Exception as e:
-        print(f"  ERROR in autocomplete explorer: {e}")
-        today_entry["autocomplete"] = {"error": str(e)}
-
-    print("\n[5/5] New Releases & Trending Charts Monitor")
-    try:
-        prev_charts = prev_snapshot.get("charts", {})
-        ch_data, ch_rows = run_charts_monitor(session, prev_charts)
-        today_entry["charts"] = ch_data
-        all_csv_rows.extend(ch_rows)
-    except Exception as e:
-        print(f"  ERROR in charts monitor: {e}")
-        today_entry["charts"] = {"error": str(e)}
+    for project in projects:
+        print(f"\n{'=' * 78}\nProject: {project['label']}  (app {project['app_id']})\n{'=' * 78}")
+        prev_project_snapshot = prev_projects.get(project["id"], {})
+        try:
+            project_entry, csv_rows = run_project(session, project, prev_project_snapshot)
+            today_entry["projects"][project["id"]] = project_entry
+            all_csv_rows.extend(csv_rows)
+        except Exception as e:
+            print(f"  ERROR running project '{project['id']}': {e}")
+            today_entry["projects"][project["id"]] = {
+                "app_id": project["app_id"], "label": project["label"], "error": str(e),
+            }
 
     history[today_str] = today_entry
     save_json_history(history)
     append_csv_rows(all_csv_rows, today_str)
 
     print("\n" + "=" * 78)
-    print(f"Done. {len(all_csv_rows)} metric rows written for {today_str}.")
+    print(f"Done. {len(all_csv_rows)} metric rows written for {today_str} across {len(projects)} project(s).")
     print(f"  -> {config.JSON_HISTORY_PATH}")
     print(f"  -> {config.CSV_DASHBOARD_PATH}")
     print("=" * 78)
