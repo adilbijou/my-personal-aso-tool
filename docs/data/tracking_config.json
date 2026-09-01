@@ -1,0 +1,15 @@
+{
+  "projects": [
+    {
+      "id": "example-project",
+      "label": "Example App (edit or delete me in Settings)",
+      "app_id": "570060128",
+      "keywords": ["meal planner", "calorie tracker"],
+      "countries": ["us", "gb"],
+      "competitor_app_ids": ["341232718"],
+      "categories": {"6013": "Health & Fitness"},
+      "review_countries": ["us"],
+      "autocomplete_seeds": ["meal planner"]
+    }
+  ]
+}
