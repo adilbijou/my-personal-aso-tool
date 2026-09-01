@@ -118,7 +118,11 @@ NEW_RELEASE_LOOKBACK_DAYS = 30
 # ──────────────────────────────────────────────────────────────────────────
 # 8. STORAGE
 # ──────────────────────────────────────────────────────────────────────────
-DATA_DIR = "data"
+# Data lives inside docs/ so the GitHub Pages dashboard (also served from
+# docs/) can fetch it with a plain relative path — no separate copy step,
+# no server. If you don't want the dashboard site, you can point this back
+# at "data" instead; the engine itself doesn't care where it writes.
+DATA_DIR = "docs/data"
 JSON_HISTORY_PATH = f"{DATA_DIR}/comprehensive_aso_history.json"
 CSV_DASHBOARD_PATH = f"{DATA_DIR}/aso_dashboard.csv"
 
