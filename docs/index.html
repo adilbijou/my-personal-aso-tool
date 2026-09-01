@@ -27,6 +27,7 @@
       <li><button class="nav-item" data-tab="reviews">Reviews</button></li>
       <li><button class="nav-item" data-tab="niche">Niche explorer</button></li>
       <li><button class="nav-item" data-tab="charts">Charts<span class="count" id="nav-count-charts"></span></button></li>
+      <li><button class="nav-item" data-tab="settings">Settings</button></li>
     </ul>
 
     <div class="sidebar-footer" id="sidebar-footer">
@@ -37,6 +38,8 @@
   <div class="main">
     <div class="topbar">
       <h1 class="page-title" id="page-title">Overview</h1>
+
+      <select class="project-switcher" id="project-switcher"></select>
 
       <div class="search-wrap">
         <span class="search-icon">&#8981;</span>
@@ -109,6 +112,36 @@
           <input class="filter-input" id="chart-filter" type="text" placeholder="Filter apps by name&hellip;">
         </div>
         <div id="chart-body"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-settings">
+        <div class="panel">
+          <h2 class="section-heading">GitHub connection</h2>
+          <p class="section-sub">Needed only to save changes below back to your repo. Stored in this browser only &mdash; never sent anywhere but directly to api.github.com from your own device.</p>
+          <div class="settings-grid">
+            <label class="settings-field">Repo owner<input class="filter-input" id="gh-owner" placeholder="e.g. adilbijou"></label>
+            <label class="settings-field">Repo name<input class="filter-input" id="gh-repo" placeholder="e.g. my-personal-aso-tool"></label>
+            <label class="settings-field">Branch<input class="filter-input" id="gh-branch" placeholder="main"></label>
+            <label class="settings-field">Personal access token<input class="filter-input" id="gh-token" type="password" placeholder="github_pat_&hellip;"></label>
+          </div>
+          <div class="settings-actions">
+            <button class="btn-secondary" id="gh-save-connection">Save connection</button>
+            <span class="settings-status" id="gh-connection-status"></span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 class="section-heading">Tracked apps</h2>
+          <p class="section-sub">Each tracked app has its own keywords, countries, competitors, and chart categories. Add as many as you like &mdash; the daily workflow runs all five modules for every one of them.</p>
+          <div id="projects-editor"></div>
+          <button class="btn-secondary" id="add-project-btn">+ Add tracked app</button>
+        </div>
+
+        <div class="settings-actions settings-actions-sticky">
+          <button class="btn-primary" id="save-projects-btn">Save changes to GitHub</button>
+          <button class="btn-secondary" id="run-workflow-btn">Run workflow now</button>
+          <span class="settings-status" id="settings-status"></span>
+        </div>
       </section>
 
     </div>
