@@ -651,7 +651,15 @@ def main():
     prev_snapshot = history.get(prev_date, {}) if prev_date else {}
     print(f"Previous snapshot found: {prev_date or 'none (this is day 1)'}")
 
-    today_entry = {"generated_at_utc": datetime.utcnow().isoformat() + "Z"}
+    # NOTE: JSON object keys that look like integers (all App Store app IDs
+    # do) get reordered to ascending numeric order by JS engines on
+    # JSON.parse, regardless of insertion order — so the dashboard can't
+    # rely on "first key in competitor_metadata" to mean "the target app".
+    # Storing it explicitly here is what the frontend reads instead.
+    today_entry = {
+        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+        "target_app_id": config.TARGET_APP_ID,
+    }
     all_csv_rows = []
     auto_competitors = set()
 
